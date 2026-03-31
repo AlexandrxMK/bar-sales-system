@@ -1,13 +1,5 @@
-"""
-CAMADA DE LÓGICA DE NEGÓCIOS E BANCO DE DADOS
-============================================
-Responsável APENAS por operações CRUD.
-- SEM prints, SEM inputs
-- Retorna dados ou lança exceções
-- Interface fica totalmente separada
-"""
-
 from conexao import Conexao
+import json
 from produtos import Produto, Cliente, Vendedor, Venda, ItemVenda, Pagamento
 
 db = Conexao()
@@ -398,83 +390,17 @@ def registrar_venda(id_cliente, id_vendedor, itens, metodo_pagamento):
         raise Exception("Erro ao conectar ao banco")
 
     try:
-        # Valida cliente
-        cursor.execute(
-            "SELECT id_cliente FROM clientes WHERE id_cliente = %s", (id_cliente,))
-        if not cursor.fetchone():
-            raise ValueError(f"Cliente {id_cliente} não encontrado")
-
-        # Valida vendedor
-        cursor.execute(
-            "SELECT id_vendedor FROM vendedores WHERE id_vendedor = %s", (id_vendedor,))
-        if not cursor.fetchone():
-            raise ValueError(f"Vendedor {id_vendedor} não encontrado")
-
-        # Valida estoque
+        # Prepara a lista de itens no formato JSON esperado pela stored procedure.
+        itens_json_list = []
         for id_prod, qtd in itens:
-            cursor.execute(
-                "SELECT estoque FROM produtos WHERE id_produto = %s", (id_prod,))
-            resultado = cursor.fetchone()
-            if not resultado:
-                raise ValueError(f"Produto {id_prod} não encontrado")
-            if resultado[0] < qtd:
-                raise ValueError(
-                    f"Estoque insuficiente para produto {id_prod}")
+            itens_json_list.append({"id_produto": id_prod, "quantidade": qtd})
+        p_itens_json = json.dumps(itens_json_list)
 
-        # Insere venda
-        cursor.execute(
-            "INSERT INTO vendas (id_cliente, id_vendedor) VALUES (%s, %s)",
-            (id_cliente, id_vendedor)
-        )
+        # Chama a stored procedure 'finalizar_venda'
+        cursor.callproc('finalizar_venda', (id_cliente,
+                        id_vendedor, p_itens_json, metodo_pagamento))
         conexao.commit()
-        id_venda = cursor.lastrowid
-
-        # Processa itens e calcula valor total
-        valor_total = 0
-        for id_prod, qtd in itens:
-            cursor.execute(
-                "SELECT preco FROM produtos WHERE id_produto = %s", (id_prod,))
-            preco = float(cursor.fetchone()[0])
-            valor_total += preco * qtd
-
-            cursor.execute(
-                "INSERT INTO itens_venda (id_venda, id_produto, quantidade, preco_unitario) VALUES (%s, %s, %s, %s)",
-                (id_venda, id_prod, qtd, preco)
-            )
-
-            cursor.execute(
-                "UPDATE produtos SET estoque = estoque - %s WHERE id_produto = %s",
-                (qtd, id_prod)
-            )
-
-        conexao.commit()
-
-        # Calcula desconto
-        desconto_pct = calcular_desconto(id_cliente)
-        desconto_valor = valor_total * (desconto_pct / 100)
-        valor_final = valor_total - desconto_valor
-
-        # Atualiza valor na venda
-        cursor.execute(
-            "UPDATE vendas SET valor_total = %s WHERE id_venda = %s",
-            (valor_final, id_venda)
-        )
-
-        # Insere pagamento
-        cursor.execute(
-            "INSERT INTO pagamentos (id_venda, metodo) VALUES (%s, %s)",
-            (id_venda, metodo_pagamento)
-        )
-
-        conexao.commit()
-
-        return {
-            "id_venda": id_venda,
-            "valor_bruto": valor_total,
-            "desconto_percentual": desconto_pct,
-            "desconto_valor": desconto_valor,
-            "valor_final": valor_final
-        }
+        return True
     except Exception as e:
         conexao.rollback()
         raise
